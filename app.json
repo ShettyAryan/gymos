@@ -53,6 +53,13 @@
     "experiments": {
       "typedRoutes": true
     },
-    "newArchEnabled": true
+    "newArchEnabled": true,
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a8993898-eef7-4bba-afe5-527aae887994"
+      }
+    },
+    "owner": "shettyaryan"
   }
 }
