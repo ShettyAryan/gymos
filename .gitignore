@@ -39,3 +39,15 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# env (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# tests
+coverage/
+
+# supabase local
+supabase/.branches
+supabase/.temp

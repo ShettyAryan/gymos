@@ -1,0 +1,31 @@
+# Minimal Supabase CLI config for local development (`supabase start`) and deploys.
+# Run `supabase link --project-ref <your-ref>` before `supabase db push` / `supabase functions deploy`.
+project_id = "gymos"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enabled = true
+site_url = "gymos://"
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+# Free-tier friendly default for personal use; enable confirmations for anything shared.
+enable_confirmations = false
+
+[storage]
+enabled = true
+file_size_limit = "10MiB"
+
+[functions.ai-coach]
+verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true

@@ -1,25 +1,58 @@
 {
   "expo": {
-    "name": "gymos",
+    "name": "GymOS",
     "slug": "gymos",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gymos.app"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0A0A0A",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "package": "com.gymos.app",
+      "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-font",
+      "expo-asset",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GymOS uses your photo library only when you choose to add a private progress photo.",
+          "cameraPermission": "GymOS uses the camera only when you take a private progress photo.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#0A0A0A"
+        }
+      ]
+    ],
+    "scheme": "gymos",
+    "backgroundColor": "#0A0A0A",
+    "experiments": {
+      "typedRoutes": true
+    },
+    "newArchEnabled": true
   }
 }
