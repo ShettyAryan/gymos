@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
-import { Button, NumberField, Row, Segmented, Text, ToggleRow } from '@/components';
+import { Button, NumberField, Row, Segmented, Text } from '@/components';
 import type { LoggingType } from '@/domain/models/constants';
 import type { WorkoutSet } from '@/domain/models/types';
 import type { SetValues } from '@/domain/validation/set';
@@ -25,8 +25,19 @@ export type SetDraft = {
   duration: string;
   distance: string;
   effort: string; // 'none' | 'rir:N' | 'rpe:N'
-  warmup: boolean;
+  kind: SetDraftKind;
 };
+
+/** Normal working set, warm-up (not counted), or drop set (immediately after, lighter). */
+export type SetDraftKind = 'normal' | 'warmup' | 'drop';
+
+/** Suggested drop-set load: about 20% lighter, rounded to a practical plate step. */
+export function dropLoad(load: string, u: UnitSystem): string {
+  const v = parseDecimal(load);
+  if (v === null || v <= 0) return load;
+  const step = u === 'imperial' ? 5 : 2.5;
+  return String(Math.max(step, Math.round((v * 0.8) / step) * step));
+}
 
 export function draftFromSet(
   s: Partial<Pick<WorkoutSet, 'load_kg' | 'reps' | 'duration_seconds' | 'distance_m'>> | null,
@@ -45,7 +56,7 @@ export function draftFromSet(
     duration: durationValue,
     distance: s?.distance_m == null ? '' : String(displayDistance(s.distance_m, u)),
     effort: 'none',
-    warmup: false,
+    kind: 'normal',
   };
 }
 
@@ -67,7 +78,8 @@ export function valuesFromDraft(d: SetDraft, t: LoggingType, u: UnitSystem): Set
     distance_m: t === 'distance' ? parseDistance(d.distance, u) : null,
     rpe: kind === 'rpe' ? Number(raw) : null,
     rir: kind === 'rir' ? Number(raw) : null,
-    is_warmup: d.warmup,
+    is_warmup: d.kind === 'warmup',
+    set_kind: d.kind === 'drop' ? 'drop' : 'normal',
     notes: null,
   };
 }
@@ -96,6 +108,37 @@ export function SetInput({
   const set = (patch: Partial<SetDraft>) => onChange({ ...draft, ...patch });
   return (
     <View style={{ gap: spacing.sm }}>
+      {t !== 'distance' && t !== 'duration' ? (
+        <Segmented
+          options={[
+            { value: 'normal', label: 'Working' },
+            { value: 'warmup', label: 'Warm-up' },
+            ...(t === 'weight_reps' || t === 'assisted_bodyweight'
+              ? [{ value: 'drop' as const, label: 'Drop set' }]
+              : []),
+          ]}
+          value={draft.kind}
+          onChange={(k) =>
+            set({
+              kind: k,
+              load:
+                k === 'drop' && draft.kind !== 'drop' && t === 'weight_reps'
+                  ? dropLoad(draft.load, u)
+                  : draft.load,
+            })
+          }
+        />
+      ) : null}
+      {draft.kind === 'drop' ? (
+        <Text variant="caption" muted>
+          Lighter set straight after the last one, no rest. Adds volume; doesn&apos;t count toward target
+          sets.
+        </Text>
+      ) : draft.kind === 'warmup' ? (
+        <Text variant="caption" muted>
+          Not counted toward targets, records or progression.
+        </Text>
+      ) : null}
       <Row>
         {t === 'weight_reps' || t === 'bodyweight_reps' || t === 'assisted_bodyweight' ? (
           <>
@@ -157,25 +200,15 @@ export function SetInput({
       </Row>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={
-          showMore ? 'Hide effort and warm-up options' : 'Show effort and warm-up options'
-        }
+        accessibilityLabel={showMore ? 'Hide effort options' : 'Show effort options'}
         onPress={() => setShowMore((s) => !s)}
         style={{ minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
       >
         <Text variant="label" muted style={{ flex: 1 }}>
-          Effort & warm-up
+          Effort
         </Text>
-        <Text
-          variant="caption"
-          color={draft.effort !== 'none' || draft.warmup ? colors.text : colors.textFaint}
-        >
-          {[
-            draft.effort !== 'none' ? draft.effort.replace(':', ' ').toUpperCase() : null,
-            draft.warmup ? 'Warm-up' : null,
-          ]
-            .filter(Boolean)
-            .join(' · ') || 'Optional'}
+        <Text variant="caption" color={draft.effort !== 'none' ? colors.text : colors.textFaint}>
+          {draft.effort !== 'none' ? draft.effort.replace(':', ' ').toUpperCase() : 'Optional'}
         </Text>
         <Ionicons
           name={showMore ? 'chevron-up' : 'chevron-down'}
@@ -202,12 +235,6 @@ export function SetInput({
             options={['6', '7', '8', '9', '10'].map((v) => ({ value: `rpe:${v}`, label: v }))}
             value={draft.effort.startsWith('rpe') ? draft.effort : null}
             onChange={(v) => set({ effort: v })}
-          />
-          <ToggleRow
-            label="Warm-up set"
-            description="Not counted toward targets, PRs or progression."
-            value={draft.warmup}
-            onChange={(v) => set({ warmup: v })}
           />
         </View>
       ) : null}

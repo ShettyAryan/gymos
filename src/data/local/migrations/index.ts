@@ -1,6 +1,7 @@
 import type { SqlDb } from '../db';
 
 import { migration001 } from './001_initial';
+import { migration002 } from './002_sets_supersets';
 
 export type Migration = { version: number; name: string; sql: string };
 
@@ -8,7 +9,10 @@ export type Migration = { version: number; name: string; sql: string };
  * Ordered, append-only list. Never edit a shipped migration — add a new one.
  * The schema version is tracked with PRAGMA user_version.
  */
-export const migrations: Migration[] = [{ version: 1, name: 'initial', sql: migration001 }];
+export const migrations: Migration[] = [
+  { version: 1, name: 'initial', sql: migration001 },
+  { version: 2, name: 'sets_supersets', sql: migration002 },
+];
 
 export const LATEST_SCHEMA_VERSION = migrations[migrations.length - 1]!.version;
 

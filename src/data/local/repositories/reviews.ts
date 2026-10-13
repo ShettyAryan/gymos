@@ -76,7 +76,7 @@ export async function getWeeklyFacts(db: SqlDb, weekStart: DateKey): Promise<Wee
   }>(
     `SELECT ws.exercise_id, ws.load_kg, ws.reps, s.session_date FROM workout_set ws
      JOIN workout_session s ON s.id = ws.session_id
-     WHERE ws.deleted_at IS NULL AND ws.is_warmup = 0 AND s.deleted_at IS NULL
+     WHERE ws.deleted_at IS NULL AND ws.is_warmup = 0 AND ws.set_kind = 'normal' AND s.deleted_at IS NULL
        AND s.status IN ('completed_as_planned','completed_adapted','partially_completed')
        AND s.session_date <= ?`,
     [weekEnd],

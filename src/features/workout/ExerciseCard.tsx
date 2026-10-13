@@ -1,23 +1,27 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { ActionSheetIOS, Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { Button, Card, IconButton, Notice, Row, StatusPill, Text } from '@/components';
 import { animateNextLayout, PopIn, Reveal } from '@/components/motion';
+import { ActionSheet, type SheetAction } from '@/components/Sheet';
 import { useMutation } from '@/data/DatabaseProvider';
 import {
   deferExercise,
   logSet,
+  setExerciseFinished,
   setIssueFlag,
   setRecommendationStatus,
+  toggleSessionSuperset,
   undeferExercise,
+  undoSubstitution,
   updateSet,
   type PerformanceEntry,
   type Recommendation,
   type SessionItem,
 } from '@/data/local/repositories/workouts';
-import type { WorkoutSet } from '@/domain/models/types';
+import { isTargetSet, type WorkoutSet } from '@/domain/models/types';
 import { DECISION_LABEL } from '@/domain/rules/progression';
 import { formatPrescription } from '@/features/programme/format';
 import { colors, spacing } from '@/theme/tokens';
@@ -34,9 +38,18 @@ type Props = {
   previous: PerformanceEntry | null;
   recommendation: Recommendation | null;
   replacedName: string | null;
+  /** Superset label (e.g. "Superset A") when this exercise is part of one. */
+  supersetLabel?: string | null;
+  /** Name of the next exercise in the superset; null when this is the last one (rest after it). */
+  nextInSuperset?: string | null;
+  /** Whether there is an exercise after this one (to offer "superset with next"). */
+  hasNext: boolean;
   onLogged: (restSeconds: number, label: string) => void;
   onDeleteSet: (set: WorkoutSet) => void;
 };
+
+const kindOf = (s: WorkoutSet) =>
+  s.is_warmup ? 'warmup' : s.set_kind === 'drop' ? 'drop' : 'normal';
 
 export function ExerciseCard({
   item,
@@ -44,18 +57,23 @@ export function ExerciseCard({
   previous,
   recommendation,
   replacedName,
+  supersetLabel,
+  nextInSuperset,
+  hasNext,
   onLogged,
   onDeleteSet,
 }: Props) {
   const { we, exercise, sets } = item;
   const t = exercise?.logging_type ?? 'weight_reps';
-  const working = sets.filter((s) => !s.is_warmup);
+  const working = sets.filter(isTargetSet);
   const target = we.target;
-  const done = target ? working.length >= target.sets : false;
+  const targetMet = target ? working.length >= target.sets : false;
+  const finished = !!we.finished_at;
   const inactive = we.disposition === 'deferred' || we.disposition === 'removed';
+  const name = exercise?.name ?? 'Exercise';
 
   const initial = (): SetDraft => {
-    const last = sets[sets.length - 1];
+    const last = [...sets].reverse().find((s) => !s.is_warmup);
     if (last) return draftFromSet(last, t, units);
     if (
       recommendation &&
@@ -77,7 +95,10 @@ export function ExerciseCard({
   };
   const [draft, setDraft] = useState<SetDraft>(initial);
   const [editing, setEditing] = useState<WorkoutSet | null>(null);
-  const [expanded, setExpanded] = useState(!inactive);
+  const [expanded, setExpanded] = useState(!inactive && !finished);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [setMenu, setSetMenu] = useState<WorkoutSet | null>(null);
+  const [confirmFlag, setConfirmFlag] = useState(false);
 
   const log = useMutation((db, d: SetDraft) => logSet(db, we.id, valuesFromDraft(d, t, units)));
   const edit = useMutation((db, s: WorkoutSet, d: SetDraft) =>
@@ -86,9 +107,15 @@ export function ExerciseCard({
   const flag = useMutation((db, v: boolean) => setIssueFlag(db, we.id, v));
   const skip = useMutation((db) => deferExercise(db, we.id, 'Skipped during the workout.'));
   const unskip = useMutation((db) => undeferExercise(db, we.id));
+  const unsub = useMutation((db) => undoSubstitution(db, we.id));
+  const finish = useMutation((db, v: boolean) => setExerciseFinished(db, we.id, v));
+  const superset = useMutation((db) => toggleSessionSuperset(db, we.id));
   const reco = useMutation((db, status: 'accepted' | 'dismissed') =>
     setRecommendationStatus(db, recommendation!.id, status),
   );
+
+  const fail = (title: string) => (e: unknown) =>
+    Alert.alert(title, e instanceof Error ? e.message : String(e));
 
   const submit = async () => {
     try {
@@ -98,82 +125,121 @@ export function ExerciseCard({
         setEditing(null);
         return;
       }
+      const kind = draft.kind;
       await log.run(draft);
       // Persisted — now it is safe to acknowledge (haptic + rest timer only after the write).
       haptics.success();
       animateNextLayout(); // the refreshed set list slides the new row in
-      if (!draft.warmup && target) onLogged(target.restSeconds, exercise?.name ?? 'Rest');
-      else if (!draft.warmup && exercise) onLogged(exercise.default_rest_seconds, exercise.name);
-      setDraft((d) => ({ ...d, warmup: false }));
+      // Rest: none after warm-ups; none between exercises of a superset (rest after the last one).
+      if (kind !== 'warmup' && nextInSuperset == null) {
+        onLogged(target?.restSeconds ?? exercise?.default_rest_seconds ?? 90, name);
+      }
+      setDraft((d) => ({ ...d, kind: kind === 'warmup' ? 'warmup' : 'normal' }));
     } catch (e) {
       Alert.alert('Set not saved', e instanceof Error ? e.message : 'Please check the values.');
     }
   };
 
-  const openMenu = () => {
-    const options = [
-      'Substitute exercise',
-      working.length === 0 ? 'Skip for today' : null,
-      we.issue_flag ? 'Clear "something felt off"' : 'Something felt off',
-      exercise ? 'Exercise details & history' : null,
-      'Cancel',
-    ].filter((x): x is string => !!x);
-    const handle = (label: string) => {
-      if (label === 'Substitute exercise')
-        router.push({
-          pathname: '/exercises',
-          params: { pick: 'substitute_workout_exercise', target: we.id },
-        });
-      if (label === 'Skip for today') animateNextLayout();
-      skip.run().catch((e) => Alert.alert('Not skipped', String(e?.message ?? e)));
-      if (label.includes('felt off')) {
-        flag.run(!we.issue_flag);
-        if (!we.issue_flag)
-          Alert.alert(
-            'Noted',
-            'No progression will be suggested for this exercise from today. If you have pain, stop and consider a qualified professional — GymOS cannot assess injuries.',
-          );
-      }
-      if (label.startsWith('Exercise details') && exercise)
-        router.push({ pathname: '/exercises/[id]', params: { id: exercise.id } });
-    };
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: options.length - 1 },
-        (i) => handle(options[i]!),
-      );
-    } else {
-      Alert.alert(
-        exercise?.name ?? 'Exercise',
-        undefined,
-        options.map((o) => ({
-          text: o,
-          style: o === 'Cancel' ? 'cancel' : 'default',
-          onPress: () => handle(o),
-        })),
-      );
+  const onFinish = async (v: boolean) => {
+    animateNextLayout();
+    try {
+      await finish.run(v);
+      if (v) {
+        haptics.success();
+        setExpanded(false);
+        setEditing(null);
+      } else setExpanded(true);
+    } catch (e) {
+      fail('Not updated')(e);
     }
   };
 
-  const onSetPress = (s: WorkoutSet) =>
-    Alert.alert(`Set ${s.set_order + 1}`, formatSet(s, t, units), [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Edit',
-        onPress: () => {
-          setEditing(s);
-          setDraft({
-            ...draftFromSet(s, t, units),
-            warmup: s.is_warmup,
-            effort: s.rir !== null ? `rir:${s.rir}` : s.rpe !== null ? `rpe:${s.rpe}` : 'none',
-          });
-          setExpanded(true);
+  const actions: SheetAction[] = [
+    ...(finished
+      ? [{ label: 'Reopen exercise', description: 'Log more sets', onPress: () => onFinish(false) }]
+      : []),
+    {
+      label: 'Substitute exercise',
+      description: working.length
+        ? 'Logged sets stay with this exercise'
+        : 'Swap for an alternative',
+      onPress: () =>
+        router.push({
+          pathname: '/exercises',
+          params: { pick: 'substitute_workout_exercise', target: we.id },
+        }),
+    },
+    ...(we.disposition === 'substituted' && we.replaced_exercise_id && working.length === 0
+      ? [
+          {
+            label: 'Undo substitution',
+            description: replacedName ? `Back to ${replacedName}` : 'Back to the planned exercise',
+            onPress: () => unsub.run().catch(fail('Not undone')),
+          },
+        ]
+      : []),
+    ...(we.superset_group
+      ? [
+          {
+            label: 'Remove from superset',
+            onPress: () => {
+              animateNextLayout();
+              superset.run().catch(fail('Not updated'));
+            },
+          },
+        ]
+      : hasNext
+        ? [
+            {
+              label: 'Superset with next exercise',
+              description: 'Back to back, rest after the second',
+              onPress: () => {
+                animateNextLayout();
+                superset.run().catch(fail('Not updated'));
+              },
+            },
+          ]
+        : []),
+    ...(working.length === 0 && !inactive
+      ? [
+          {
+            label: 'Skip for today',
+            description: 'Recorded as deferred, not removed from your plan',
+            onPress: () => {
+              animateNextLayout();
+              skip.run().catch(fail('Not skipped'));
+            },
+          },
+        ]
+      : []),
+    we.issue_flag
+      ? { label: 'Clear "felt off"', onPress: () => flag.run(false) }
+      : {
+          label: 'Something felt off',
+          description: 'Pauses progression suggestions for this exercise',
+          destructive: true,
+          onPress: () => setConfirmFlag(true),
         },
-      },
-      { text: 'Delete', style: 'destructive', onPress: () => onDeleteSet(s) },
-    ]);
+    ...(exercise
+      ? [
+          {
+            label: 'Exercise details & history',
+            onPress: () =>
+              router.push({ pathname: '/exercises/[id]', params: { id: exercise.id } }),
+          },
+        ]
+      : []),
+  ];
 
   const tags = [
+    supersetLabel
+      ? {
+          label: nextInSuperset
+            ? `${supersetLabel} · then ${nextInSuperset}`
+            : `${supersetLabel} · rest after`,
+          tone: 'accent' as const,
+        }
+      : null,
     we.disposition === 'substituted'
       ? {
           label: replacedName ? `Instead of ${replacedName}` : 'Substituted',
@@ -182,15 +248,36 @@ export function ExerciseCard({
       : null,
     we.disposition === 'deferred' ? { label: 'Deferred today', tone: 'warning' as const } : null,
     we.disposition === 'removed' ? { label: 'Removed today', tone: 'neutral' as const } : null,
+    finished
+      ? {
+          label:
+            targetMet || !target ? 'Finished' : `Finished early · ${working.length}/${target.sets}`,
+          tone: targetMet || !target ? ('success' as const) : ('warning' as const),
+        }
+      : null,
     we.issue_flag ? { label: 'Felt off', tone: 'danger' as const } : null,
-  ].filter((x): x is { label: string; tone: 'info' | 'warning' | 'neutral' | 'danger' } => !!x);
+  ].filter(
+    (
+      x,
+    ): x is {
+      label: string;
+      tone: 'accent' | 'info' | 'warning' | 'neutral' | 'danger' | 'success';
+    } => !!x,
+  );
   const showReco =
     !!recommendation &&
     recommendation.status === 'pending' &&
     recommendation.decision !== 'insufficient_data';
+  let workingIndex = 0;
 
   return (
-    <Card style={[inactive ? styles.inactive : null, done ? styles.done : null]}>
+    <Card
+      style={[
+        inactive ? styles.inactive : null,
+        finished || targetMet ? styles.done : null,
+        supersetLabel ? styles.superset : null,
+      ]}
+    >
       <Row align="flex-start">
         <Pressable
           style={styles.flex}
@@ -199,9 +286,9 @@ export function ExerciseCard({
             setExpanded((e) => !e);
           }}
           accessibilityRole="button"
-          accessibilityLabel={`${exercise?.name ?? 'Exercise'}${done ? ', target complete' : ''}`}
+          accessibilityLabel={`${name}${targetMet ? ', target complete' : ''}${finished ? ', finished' : ''}. Tap to ${expanded ? 'collapse' : 'expand'}.`}
         >
-          <Text variant="heading">{exercise?.name ?? 'Unknown exercise'}</Text>
+          <Text variant="heading">{name}</Text>
           <Text variant="caption" muted>
             {target ? formatPrescription({ ...target, loggingType: t }) : 'No target · log freely'}
           </Text>
@@ -214,7 +301,7 @@ export function ExerciseCard({
         >
           <Text
             variant="heading"
-            color={done ? colors.success : colors.text}
+            color={targetMet ? colors.success : colors.text}
             style={styles.tabular}
           >
             {working.length}
@@ -225,8 +312,8 @@ export function ExerciseCard({
         </View>
         <IconButton
           icon="ellipsis-horizontal"
-          label={`Options for ${exercise?.name ?? 'exercise'}`}
-          onPress={openMenu}
+          label={`Options for ${name}`}
+          onPress={() => setMenuOpen(true)}
         />
       </Row>
 
@@ -290,68 +377,166 @@ export function ExerciseCard({
 
           {sets.length ? (
             <View>
-              {sets.map((s) => (
-                <Reveal key={s.id}>
-                  <Pressable
-                    onPress={() => onSetPress(s)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Set ${s.set_order + 1}: ${formatSet(s, t, units)}${s.is_warmup ? ', warm-up' : ''}. Saved. Tap to edit or delete.`}
-                    style={({ pressed }) => [
-                      styles.setRow,
-                      editing?.id === s.id ? styles.setRowEditing : null,
-                      pressed ? styles.pressed : null,
-                    ]}
-                  >
-                    <Text variant="caption" faint style={styles.labelCol}>
-                      {s.is_warmup ? 'W' : working.indexOf(s) + 1}
-                    </Text>
-                    <Text style={[styles.flex, styles.tabular]}>{formatSet(s, t, units)}</Text>
-                    <PopIn>
-                      <Ionicons name="checkmark" size={16} color={colors.success} />
-                    </PopIn>
-                  </Pressable>
-                </Reveal>
-              ))}
+              {sets.map((s) => {
+                const kind = kindOf(s);
+                const label =
+                  kind === 'warmup' ? 'W' : kind === 'drop' ? 'D' : String(++workingIndex);
+                return (
+                  <Reveal key={s.id}>
+                    <Pressable
+                      onPress={() => setSetMenu(s)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${kind === 'warmup' ? 'Warm-up set' : kind === 'drop' ? 'Drop set' : `Set ${label}`}: ${formatSet(s, t, units)}. Saved. Tap for options.`}
+                      style={({ pressed }) => [
+                        styles.setRow,
+                        kind === 'drop' ? styles.dropRow : null,
+                        editing?.id === s.id ? styles.setRowEditing : null,
+                        pressed ? styles.pressed : null,
+                      ]}
+                    >
+                      <Text
+                        variant="label"
+                        color={kind === 'drop' ? colors.accent : colors.textFaint}
+                        style={styles.labelCol}
+                      >
+                        {label}
+                      </Text>
+                      <Text
+                        style={[styles.flex, styles.tabular]}
+                        color={kind === 'warmup' ? colors.textMuted : colors.text}
+                      >
+                        {formatSet(s, t, units)}
+                      </Text>
+                      <PopIn>
+                        <Ionicons name="checkmark" size={16} color={colors.success} />
+                      </PopIn>
+                    </Pressable>
+                  </Reveal>
+                );
+              })}
             </View>
           ) : null}
 
           {inactive ? (
-            <View style={styles.start}>
-              <Button
-                label="Do it anyway"
-                compact
-                variant="secondary"
-                onPress={() => {
-                  animateNextLayout();
-                  unskip.run();
-                }}
-              />
-            </View>
-          ) : (
-            <SetInput
-              loggingType={t}
-              units={units}
-              draft={draft}
-              onChange={setDraft}
-              onSubmit={submit}
-              submitting={log.pending || edit.pending}
-              submitLabel={editing ? `Save set ${editing.set_order + 1}` : 'Log set'}
-            />
-          )}
-          {editing ? (
             <Button
-              label="Cancel edit"
-              variant="ghost"
+              label="Do it anyway"
               compact
+              variant="secondary"
               inline
               onPress={() => {
-                setEditing(null);
-                setDraft(initial());
+                animateNextLayout();
+                unskip.run();
               }}
             />
-          ) : null}
+          ) : finished ? (
+            <Button
+              label="Reopen exercise"
+              compact
+              variant="secondary"
+              inline
+              onPress={() => onFinish(false)}
+            />
+          ) : (
+            <>
+              <SetInput
+                loggingType={t}
+                units={units}
+                draft={draft}
+                onChange={setDraft}
+                onSubmit={submit}
+                submitting={log.pending || edit.pending}
+                submitLabel={
+                  editing
+                    ? 'Save changes'
+                    : draft.kind === 'drop'
+                      ? 'Log drop set'
+                      : draft.kind === 'warmup'
+                        ? 'Log warm-up'
+                        : 'Log set'
+                }
+              />
+              {editing ? (
+                <Button
+                  label="Cancel edit"
+                  variant="secondary"
+                  onPress={() => {
+                    setEditing(null);
+                    setDraft(initial());
+                  }}
+                />
+              ) : sets.length ? (
+                <Button
+                  label={
+                    targetMet || !target
+                      ? 'Finish exercise'
+                      : `Finish exercise early (${working.length}/${target.sets})`
+                  }
+                  variant="secondary"
+                  onPress={() => onFinish(true)}
+                />
+              ) : null}
+            </>
+          )}
         </View>
       ) : null}
+
+      <ActionSheet
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        title={name}
+        actions={actions}
+      />
+
+      <ActionSheet
+        visible={!!setMenu}
+        onClose={() => setSetMenu(null)}
+        title={
+          setMenu
+            ? kindOf(setMenu) === 'drop'
+              ? 'Drop set'
+              : kindOf(setMenu) === 'warmup'
+                ? 'Warm-up set'
+                : 'Set'
+            : ''
+        }
+        message={setMenu ? formatSet(setMenu, t, units) : undefined}
+        actions={
+          setMenu
+            ? [
+                {
+                  label: 'Edit set',
+                  onPress: () => {
+                    const s = setMenu;
+                    setEditing(s);
+                    setDraft({
+                      ...draftFromSet(s, t, units),
+                      kind: kindOf(s),
+                      effort:
+                        s.rir !== null ? `rir:${s.rir}` : s.rpe !== null ? `rpe:${s.rpe}` : 'none',
+                    });
+                    setExpanded(true);
+                  },
+                },
+                {
+                  label: 'Delete set',
+                  destructive: true,
+                  description: 'You can undo straight after',
+                  onPress: () => onDeleteSet(setMenu),
+                },
+              ]
+            : []
+        }
+      />
+
+      <ActionSheet
+        visible={confirmFlag}
+        onClose={() => setConfirmFlag(false)}
+        title="Something felt off?"
+        message="GymOS will stop suggesting progression for this exercise until you clear the flag. If you have pain, stop and consider a qualified professional — the app can't assess injuries."
+        actions={[
+          { label: 'Flag this exercise', destructive: true, onPress: () => flag.run(true) },
+        ]}
+      />
     </Card>
   );
 }
@@ -361,6 +546,7 @@ const styles = StyleSheet.create({
   tabular: { fontVariant: ['tabular-nums'] },
   inactive: { opacity: 0.6 },
   done: { borderLeftWidth: 2, borderLeftColor: colors.success },
+  superset: { borderLeftWidth: 2, borderLeftColor: colors.accent },
   counter: { minWidth: 44, alignItems: 'flex-end', paddingTop: 2 },
   body: { gap: spacing.md },
   lastRow: { paddingTop: spacing.xs },
@@ -372,7 +558,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
   },
+  dropRow: { paddingLeft: spacing.md },
   setRowEditing: { backgroundColor: colors.surfaceAlt },
   pressed: { opacity: 0.55 },
-  start: { alignSelf: 'flex-start' },
 });

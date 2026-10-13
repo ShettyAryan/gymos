@@ -1,12 +1,15 @@
 import type { Equipment, LoggingType, MovementPattern, Muscle } from '@/domain/models/constants';
 
+import { MORE_EXERCISES } from './exercisesMore';
+
 /**
  * Curated starter library — intentionally modest, not exhaustive. Users can add custom exercises.
  * Instructions are neutral setup/execution cues, not medical or injury advice.
  * IDs are stable slugs so programmes and sync references survive reinstalls.
  * Bump SEED_VERSION when this list changes; seeding is an idempotent upsert of non-custom rows.
  */
-export const SEED_VERSION = 1;
+// v2: library expanded (seed/exercisesMore.ts).
+export const SEED_VERSION = 2;
 
 export type SeedExercise = {
   id: string;
@@ -25,7 +28,7 @@ export type SeedExercise = {
 
 const ex = (e: SeedExercise) => e;
 
-export const SEED_EXERCISES: SeedExercise[] = [
+const CORE_EXERCISES: SeedExercise[] = [
   // Squat
   ex({
     id: 'back_squat',
@@ -845,3 +848,5 @@ export const SEED_EXERCISES: SeedExercise[] = [
     alternatives: ['treadmill_walk'],
   }),
 ];
+
+export const SEED_EXERCISES: SeedExercise[] = [...CORE_EXERCISES, ...MORE_EXERCISES];

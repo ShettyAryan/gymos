@@ -25,6 +25,7 @@ import { getCheckin, listProgressEntries } from '@/data/local/repositories/progr
 import { listPersonalRecords } from '@/data/local/repositories/workouts';
 import { RECORD_LABEL, type RecordType } from '@/domain/rules/prs';
 import { BADGES, levelFor } from '@/domain/rules/xp';
+import { ProgressCharts } from '@/features/progress/ProgressCharts';
 import { useUnits } from '@/features/workout/useUnits';
 import { colors } from '@/theme/tokens';
 import { formatDateKey, toDateKey } from '@/utils/dates';
@@ -90,7 +91,21 @@ export default function ProgressScreen() {
         />
       </Card>
 
-      <Section title="Strength">
+      <Card onPress={() => router.push('/insights')} accessibilityLabel="Open training insights">
+        <Text variant="label" color={colors.accent}>
+          Insights
+        </Text>
+        <Text variant="heading">
+          What to train more, what to ease off, what&apos;s ready to progress
+        </Text>
+        <Text variant="caption" muted>
+          Sets per muscle vs target · push/pull balance · plateaus · next loads
+        </Text>
+      </Card>
+
+      <ProgressCharts units={units} />
+
+      <Section title="Exercises">
         {trained.length === 0 ? (
           <EmptyState
             title="No lifts yet"

@@ -92,6 +92,11 @@ export default function CoachScreen() {
       <Section title="Accountability">
         <List>
           <ListRow
+            title="Training insights"
+            subtitle="Over/undertrained muscles, balance, plateaus, next loads"
+            onPress={() => router.push('/insights')}
+          />
+          <ListRow
             title="Weekly review"
             subtitle="Planned vs completed, records, next-week focus"
             onPress={() => router.push('/review')}

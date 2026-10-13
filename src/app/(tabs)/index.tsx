@@ -254,8 +254,8 @@ export default function TodayScreen() {
         <Card>
           <MetricRow>
             <Metric
-              label="Attended"
-              value={`${dash.week.attended}/${weekTarget}`}
+              label="Sessions"
+              value={`${dash.week.sessions}/${weekTarget}`}
               hint={
                 dash.week.adapted ? `${dash.week.adapted} adapted` : `${dash.week.planned} planned`
               }
@@ -272,11 +272,12 @@ export default function TodayScreen() {
             />
           </MetricRow>
           <ProgressBar
-            value={weekTarget ? dash.week.attended / weekTarget : 0}
-            label={`Weekly commitment: ${dash.week.attended} of ${weekTarget} sessions`}
+            value={weekTarget ? dash.week.sessions / weekTarget : 0}
+            label={`Weekly commitment: ${dash.week.sessions} of ${weekTarget} sessions`}
           />
           <Text variant="caption" faint>
-            Streaks count planned sessions attended. Rest days and reschedules never break them.
+            Freeform sessions count too. Streaks are training days in a row — rest days never break
+            them.
           </Text>
         </Card>
       </Section>

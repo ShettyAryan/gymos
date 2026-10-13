@@ -31,6 +31,7 @@ import {
   listVersions,
   moveDay,
   moveProgrammeExercise,
+  toggleProgrammeSuperset,
   renameProgramme,
 } from '@/data/local/repositories/programmes';
 import { incrementCounter } from '@/data/local/repositories/settings';
@@ -73,6 +74,7 @@ export default function ProgrammeEditorScreen() {
     await applyReminders(db).catch(() => undefined); // keep opt-in reminders aligned with the new schedule
     return v;
   });
+  const link = useMutation((db, itemId: string) => toggleProgrammeSuperset(db, itemId));
   const move = useMutation((db, itemId: string, dir: -1 | 1) =>
     moveProgrammeExercise(db, itemId, dir),
   );
@@ -243,8 +245,11 @@ export default function ProgrammeEditorScreen() {
             <View>
               {items.map((pe, i) => {
                 const ex = exercises.get(pe.exercise_id);
+                const linkedToNext =
+                  !!pe.superset_group && items[i + 1]?.superset_group === pe.superset_group;
+                const inGroup = !!pe.superset_group;
                 return (
-                  <View key={pe.id} style={styles.itemRow}>
+                  <View key={pe.id} style={[styles.itemRow, inGroup ? styles.grouped : null]}>
                     <Text variant="caption" faint style={styles.index}>
                       {i + 1}
                     </Text>
@@ -270,8 +275,23 @@ export default function ProgrammeEditorScreen() {
                           loggingType: ex?.logging_type,
                         })}{' '}
                         · {labelOf(PRIORITIES, pe.priority)}
+                        {inGroup ? ' · superset' : ''}
                       </Text>
                     </Pressable>
+                    <IconButton
+                      icon={linkedToNext || (inGroup && !items[i + 1]) ? 'link' : 'link-outline'}
+                      size={16}
+                      color={inGroup ? colors.accent : colors.textMuted}
+                      label={
+                        inGroup
+                          ? `Remove ${ex?.name ?? 'exercise'} from superset`
+                          : `Superset ${ex?.name ?? 'exercise'} with the next exercise`
+                      }
+                      disabled={!inGroup && i === items.length - 1}
+                      onPress={() =>
+                        link.run(pe.id).catch((e: Error) => Alert.alert('Not linked', e.message))
+                      }
+                    />
                     <IconButton
                       icon="arrow-up"
                       size={16}
@@ -377,4 +397,5 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   index: { width: 24 },
+  grouped: { borderLeftWidth: 2, borderLeftColor: colors.accent, paddingLeft: spacing.sm },
 });

@@ -68,12 +68,11 @@ export async function getCalendar(
 /** Streak across all history (from the first approved version). */
 export async function getStreak(db: SqlDb, todayKey = today()) {
   const windows = await getVersionWindows(db);
-  if (windows.length === 0) return { current: 0, best: 0, currentStartedOn: null };
-  const from = windows.reduce(
-    (m, w) => (w.effectiveFrom < m ? w.effectiveFrom : m),
-    windows[0]!.effectiveFrom,
-  );
   const attendance = (await listAttendance(db)).map(lite);
+  // Start from the earliest plan or the earliest logged day (freeform-only users have no plan).
+  const starts = [...windows.map((w) => w.effectiveFrom), ...attendance.map((a) => a.date)];
+  if (starts.length === 0) return { current: 0, best: 0, currentStartedOn: null };
+  const from = starts.reduce((m, d) => (d < m ? d : m));
   return computeStreak(
     buildCalendar({ from, to: addDays(todayKey, 0), today: todayKey, windows, attendance }),
   );

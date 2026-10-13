@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
 import { StaticDatabaseProvider } from '@/data/DatabaseProvider';
 import {
   addExerciseToSession,
@@ -10,6 +12,11 @@ import {
 import { ExerciseCard } from '@/features/workout/ExerciseCard';
 
 import { freshDb, type TestDb } from '../helpers/nodeDb';
+
+const METRICS = {
+  frame: { x: 0, y: 0, width: 390, height: 844 },
+  insets: { top: 0, left: 0, right: 0, bottom: 0 },
+};
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn(), back: jest.fn() } }));
 
@@ -31,17 +38,20 @@ describe('ExerciseCard (set logging UI)', () => {
       rowsAtAck = db.raw.prepare('SELECT load_kg, reps FROM workout_set').all();
     });
     await render(
-      <StaticDatabaseProvider db={db}>
-        <ExerciseCard
-          item={item}
-          units="metric"
-          previous={null}
-          recommendation={null}
-          replacedName={null}
-          onLogged={onLogged}
-          onDeleteSet={jest.fn()}
-        />
-      </StaticDatabaseProvider>,
+      <SafeAreaProvider initialMetrics={METRICS}>
+        <StaticDatabaseProvider db={db}>
+          <ExerciseCard
+            item={item}
+            units="metric"
+            previous={null}
+            recommendation={null}
+            replacedName={null}
+            hasNext={false}
+            onLogged={onLogged}
+            onDeleteSet={jest.fn()}
+          />
+        </StaticDatabaseProvider>
+      </SafeAreaProvider>,
     );
     await fireEvent.changeText(screen.getByLabelText('Load in kg'), '60');
     await fireEvent.changeText(screen.getByLabelText('Reps'), '8');
@@ -58,23 +68,26 @@ describe('ExerciseCard (set logging UI)', () => {
 
   it('shows previous performance and does not save an invalid set', async () => {
     await render(
-      <StaticDatabaseProvider db={db}>
-        <ExerciseCard
-          item={item}
-          units="imperial"
-          previous={{
-            sessionId: 'x',
-            date: '2026-10-01',
-            title: 'Upper',
-            completedAt: null,
-            sets: [],
-          }}
-          recommendation={null}
-          replacedName={null}
-          onLogged={jest.fn()}
-          onDeleteSet={jest.fn()}
-        />
-      </StaticDatabaseProvider>,
+      <SafeAreaProvider initialMetrics={METRICS}>
+        <StaticDatabaseProvider db={db}>
+          <ExerciseCard
+            item={item}
+            units="imperial"
+            previous={{
+              sessionId: 'x',
+              date: '2026-10-01',
+              title: 'Upper',
+              completedAt: null,
+              sets: [],
+            }}
+            recommendation={null}
+            replacedName={null}
+            hasNext={false}
+            onLogged={jest.fn()}
+            onDeleteSet={jest.fn()}
+          />
+        </StaticDatabaseProvider>
+      </SafeAreaProvider>,
     );
     expect(screen.getByLabelText(/Last time on 2026-10-01/)).toBeTruthy();
     expect(screen.getByLabelText('Load in lb')).toBeTruthy();

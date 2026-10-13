@@ -1,17 +1,15 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import DateTimePicker, {
-  DateTimePickerAndroid,
-  type DateTimePickerEvent,
-} from '@react-native-community/datetimepicker';
 import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { colors, radius, spacing } from '@/theme/tokens';
 import { now } from '@/utils/clock';
 import { addDays, formatDateKey, isDateKey, toDateKey, type DateKey } from '@/utils/dates';
 import { haptics } from '@/utils/haptics';
 
-import { Reveal } from './motion';
+import { Button } from './Button';
+import { MonthCalendar, monthStart } from './MonthCalendar';
+import { Sheet } from './Sheet';
 import { Text } from './Text';
 
 type Props = {
@@ -26,39 +24,22 @@ type Props = {
   minimumDate?: DateKey;
 };
 
-const keyToDate = (k: DateKey) => {
-  const [y, m, d] = k.split('-').map(Number) as [number, number, number];
-  return new Date(y, m - 1, d);
-};
-
 /**
- * Tap-to-pick date field. Android opens the system date dialog; iOS shows an inline calendar.
- * Value stays a local date key (YYYY-MM-DD) so storage is unchanged.
+ * Tap-to-pick date field. Opens the app's own month calendar in a bottom sheet, so picking a date
+ * looks identical on iOS and Android and matches the attendance calendar.
+ * Value stays a local date key (YYYY-MM-DD).
  */
 export function DateField({ label, value, onChange, optional, quick, error, minimumDate }: Props) {
   const today: DateKey = toDateKey(now());
-  const [iosOpen, setIosOpen] = useState(false);
   const selected = isDateKey(value) ? value : null;
-  const min = keyToDate(minimumDate ?? today);
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState(monthStart(selected ?? today));
+  const [draft, setDraft] = useState<DateKey | null>(selected);
 
-  const apply = (e: DateTimePickerEvent, d?: Date) => {
-    if (e.type === 'set' && d) {
-      haptics.select();
-      onChange(toDateKey(d));
-    }
-  };
-
-  const open = () => {
-    if (Platform.OS === 'android') {
-      DateTimePickerAndroid.open({
-        value: selected ? keyToDate(selected) : min,
-        mode: 'date',
-        minimumDate: min,
-        onChange: apply,
-      });
-    } else {
-      setIosOpen((o) => !o);
-    }
+  const openPicker = () => {
+    setDraft(selected);
+    setMonth(monthStart(selected ?? today));
+    setOpen(true);
   };
 
   return (
@@ -76,7 +57,7 @@ export function DateField({ label, value, onChange, optional, quick, error, mini
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${label}: ${selected ? formatDateKey(selected, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'not set'}. Tap to choose a date.`}
-        onPress={open}
+        onPress={openPicker}
         style={({ pressed }) => [
           styles.field,
           pressed ? styles.pressed : null,
@@ -119,23 +100,6 @@ export function DateField({ label, value, onChange, optional, quick, error, mini
         </Text>
       ) : null}
 
-      {Platform.OS === 'ios' && iosOpen ? (
-        <Reveal>
-          <DateTimePicker
-            value={selected ? keyToDate(selected) : min}
-            mode="date"
-            display="inline"
-            minimumDate={min}
-            themeVariant="dark"
-            accentColor={colors.accent}
-            onChange={(e, d) => {
-              apply(e, d);
-              setIosOpen(false);
-            }}
-          />
-        </Reveal>
-      ) : null}
-
       {quick?.length ? (
         <View style={styles.quick}>
           {quick.map((q) => {
@@ -161,6 +125,29 @@ export function DateField({ label, value, onChange, optional, quick, error, mini
           })}
         </View>
       ) : null}
+
+      <Sheet visible={open} onClose={() => setOpen(false)} title={label}>
+        <MonthCalendar
+          month={month}
+          onMonthChange={setMonth}
+          today={today}
+          selected={draft}
+          onSelect={setDraft}
+          minDate={minimumDate ?? today}
+        />
+        <View style={styles.actions}>
+          <Button label="Cancel" variant="secondary" grow onPress={() => setOpen(false)} />
+          <Button
+            label="Done"
+            grow
+            disabled={!draft}
+            onPress={() => {
+              if (draft) onChange(draft);
+              setOpen(false);
+            }}
+          />
+        </View>
+      </Sheet>
     </View>
   );
 }
@@ -189,4 +176,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   chipOn: { backgroundColor: colors.ink },
+  actions: { flexDirection: 'row', gap: spacing.sm },
 });

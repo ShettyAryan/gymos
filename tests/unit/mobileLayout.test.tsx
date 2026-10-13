@@ -67,19 +67,25 @@ describe('DateField', () => {
   it('shows a readable placeholder, sets dates from quick picks and can be cleared', async () => {
     const onChange = jest.fn();
     const view = await render(
-      <DateField
-        label="Due date"
-        optional
-        value=""
-        onChange={onChange}
-        quick={[{ label: '2 weeks', days: 14 }]}
-      />,
+      <SafeAreaProvider initialMetrics={metrics}>
+        <DateField
+          label="Due date"
+          optional
+          value=""
+          onChange={onChange}
+          quick={[{ label: '2 weeks', days: 14 }]}
+        />
+      </SafeAreaProvider>,
     );
     expect(screen.getByText('Choose a date')).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: '2 weeks from today' }));
     expect(onChange).toHaveBeenCalledWith('2026-10-26');
 
-    await view.rerender(<DateField label="Due date" value="2026-10-26" onChange={onChange} />);
+    await view.rerender(
+      <SafeAreaProvider initialMetrics={metrics}>
+        <DateField label="Due date" value="2026-10-26" onChange={onChange} />
+      </SafeAreaProvider>,
+    );
     expect(screen.queryByText('Choose a date')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Clear Due date' }));
     expect(onChange).toHaveBeenLastCalledWith('');

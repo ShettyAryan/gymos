@@ -67,3 +67,39 @@ export async function deleteCustomExercise(db: SqlDb, id: string): Promise<void>
   if (!e?.is_custom) throw new Error('Only custom exercises can be deleted.');
   await softDelete(db, 'exercise', id);
 }
+
+/** Exercises logged most recently (newest first) — the quickest picks when adding to a workout. */
+export async function listRecentExercises(db: SqlDb, limit = 8): Promise<Exercise[]> {
+  const rows = await db.all<{ exercise_id: string }>(
+    `SELECT exercise_id, MAX(completed_at) AS last FROM workout_set WHERE deleted_at IS NULL
+     GROUP BY exercise_id ORDER BY last DESC LIMIT ?`,
+    [limit],
+  );
+  const map = await getExerciseMap(db);
+  return rows.map((r) => map.get(r.exercise_id)).filter((e): e is Exercise => !!e && !e.deleted_at);
+}
+
+/** Suggested swaps for an exercise: its listed alternatives, then same pattern & muscle. */
+export async function listAlternatives(
+  db: SqlDb,
+  exerciseId: string,
+  limit = 6,
+): Promise<Exercise[]> {
+  const map = await getExerciseMap(db);
+  const ex = map.get(exerciseId);
+  if (!ex) return [];
+  const listed = ex.alternatives
+    .map((a) => map.get(a))
+    .filter((e): e is Exercise => !!e && !e.deleted_at);
+  const similar = [...map.values()]
+    .filter(
+      (e) =>
+        !e.deleted_at &&
+        e.id !== ex.id &&
+        !listed.includes(e) &&
+        e.movement_pattern === ex.movement_pattern &&
+        e.primary_muscles.some((m) => ex.primary_muscles.includes(m)),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return [...listed, ...similar].slice(0, limit);
+}

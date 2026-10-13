@@ -11,6 +11,8 @@ export const setValuesSchema = z.object({
   rpe: z.number().min(1).max(10).multipleOf(0.5).nullable(),
   rir: z.number().int().min(0).max(10).nullable(),
   is_warmup: z.boolean(),
+  /** Omitted = a normal set. */
+  set_kind: z.enum(['normal', 'drop']).optional(),
   notes: z.string().max(500).nullable(),
 });
 
@@ -20,6 +22,8 @@ export type SetValues = z.infer<typeof setValuesSchema>;
 export function validateSetValues(t: LoggingType, v: SetValues): string | null {
   const parsed = setValuesSchema.safeParse(v);
   if (!parsed.success) return parsed.error.issues[0]?.message ?? 'Invalid set values.';
+  if (v.is_warmup && v.set_kind === 'drop')
+    return 'A set can be a warm-up or a drop set, not both.';
   switch (t) {
     case 'weight_reps':
       if (v.load_kg === null) return 'Enter the load.';

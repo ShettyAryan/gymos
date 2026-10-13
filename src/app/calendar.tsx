@@ -1,17 +1,21 @@
 import { Stack as RouterStack, router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import {
+  Card,
   ErrorState,
+  List,
+  ListRow,
   LoadingState,
   Metric,
   MetricRow,
-  PeriodNav,
   Screen,
+  Section,
   StatusPill,
   Text,
 } from '@/components';
+import { addMonths, MonthCalendar, monthStart } from '@/components/MonthCalendar';
 import { useQuery } from '@/data/DatabaseProvider';
 import { getCalendar, today } from '@/data/local/repositories/attendance';
 import {
@@ -21,7 +25,7 @@ import {
   type OccurrenceOutcome,
 } from '@/domain/rules/schedule';
 import { colors, spacing, toneColor, type StatusTone } from '@/theme/tokens';
-import { addDays, formatDateKey, startOfWeek, WEEKDAY_SHORT, weekdayOf } from '@/utils/dates';
+import { addDays, formatDateKey, type DateKey } from '@/utils/dates';
 
 const tone: Record<OccurrenceOutcome, StatusTone> = {
   completed_as_planned: 'success',
@@ -37,145 +41,146 @@ const tone: Record<OccurrenceOutcome, StatusTone> = {
   upcoming: 'neutral',
 };
 
-/** One dot per day for the week strip: the most important outcome that day, or nothing for rest. */
+/** One dot per day: the most important thing that happened, or nothing on a rest day. */
 function dayTone(d: CalendarDay): StatusTone | null {
-  if (d.occurrences.length === 0) return d.extraSessions ? 'accent' : null;
-  return tone[d.occurrences[0]!.outcome];
+  if (d.occurrences.some((o) => o.outcome === 'completed_as_planned')) return 'success';
+  if (d.extraSessions > 0) return 'success';
+  const first = d.occurrences[0];
+  if (first) return tone[first.outcome];
+  return d.habitAction ? 'info' : null;
 }
 
+const LEGEND: { tone: StatusTone; label: string }[] = [
+  { tone: 'success', label: 'Trained' },
+  { tone: 'info', label: 'Adapted / habit' },
+  { tone: 'warning', label: 'Partial' },
+  { tone: 'danger', label: 'Missed' },
+  { tone: 'neutral', label: 'Planned' },
+];
+
 export default function CalendarScreen() {
-  const [offset, setOffset] = useState(0);
   const todayKey = today();
-  const start = addDays(startOfWeek(todayKey), offset * 7);
-  const end = addDays(start, 6);
-  const q = useQuery((db) => getCalendar(db, start, end), [start]);
+  const [month, setMonth] = useState<DateKey>(monthStart(todayKey));
+  const [selected, setSelected] = useState<DateKey>(todayKey);
+  const from = month;
+  const to = addDays(addMonths(month, 1), -1);
+  const q = useQuery((db) => getCalendar(db, from, to), [from]);
+
   if (q.error) return <ErrorState message={q.error} />;
   if (!q.data) return <LoadingState />;
-  const adh = weekAdherence(q.data);
+
+  const days = q.data;
+  const marks = new Map<DateKey, StatusTone>();
+  for (const d of days) {
+    const t = dayTone(d);
+    if (t) marks.set(d.date, t);
+  }
+  const past = days.filter((d) => d.date <= todayKey);
+  const adh = weekAdherence(past);
+  const trainedDays = past.filter(
+    (d) =>
+      d.extraSessions > 0 ||
+      d.occurrences.some((o) =>
+        ['completed_as_planned', 'completed_adapted', 'partially_completed'].includes(o.outcome),
+      ),
+  ).length;
+  const day = days.find((d) => d.date === selected);
 
   return (
     <Screen edges={['bottom']}>
       <RouterStack.Screen options={{ title: 'Calendar' }} />
-      <PeriodNav
-        label={`${formatDateKey(start, { day: 'numeric', month: 'short' })} – ${formatDateKey(end, { day: 'numeric', month: 'short' })}`}
-        onPrev={() => setOffset((o) => o - 1)}
-        onNext={() => setOffset((o) => o + 1)}
-      />
-
-      <View style={styles.strip}>
-        {q.data.map((d) => {
-          const isToday = d.date === todayKey;
-          const t = dayTone(d);
-          return (
-            <View
-              key={d.date}
-              style={styles.stripCell}
-              accessible
-              accessibilityLabel={`${formatDateKey(d.date, { weekday: 'long', day: 'numeric' })}: ${d.rest ? 'rest' : d.occurrences.map((o) => OUTCOME_LABEL[o.outcome]).join(', ')}`}
-            >
-              <Text variant="label" faint>
-                {WEEKDAY_SHORT[weekdayOf(d.date)]!.slice(0, 1)}
+      <Card>
+        <MonthCalendar
+          month={month}
+          onMonthChange={(m) => {
+            setMonth(m);
+            setSelected(m === monthStart(todayKey) ? todayKey : m);
+          }}
+          today={todayKey}
+          selected={selected}
+          onSelect={setSelected}
+          marks={marks}
+        />
+        <View style={styles.legend}>
+          {LEGEND.map((l) => (
+            <View key={l.label} style={styles.legendItem}>
+              <View style={[styles.dot, { backgroundColor: toneColor[l.tone] }]} />
+              <Text variant="caption" muted>
+                {l.label}
               </Text>
-              <Text
-                variant="heading"
-                color={isToday ? colors.accent : d.rest ? colors.textFaint : colors.text}
-                style={styles.tabular}
-              >
-                {Number(d.date.slice(8))}
-              </Text>
-              <View style={[styles.dot, { backgroundColor: t ? toneColor[t] : 'transparent' }]} />
             </View>
-          );
-        })}
-      </View>
+          ))}
+        </View>
+      </Card>
 
       <MetricRow>
-        <Metric label="Attended" value={`${adh.attended}/${adh.planned}`} />
+        <Metric label="Trained" value={String(trainedDays)} hint="days this month" />
         <Metric
-          label="Adapted"
-          value={String(adh.adapted)}
-          hint={adh.partial ? `${adh.partial} partial` : undefined}
+          label="Sessions"
+          value={String(adh.sessions)}
+          hint={adh.extra ? `${adh.extra} freeform` : 'logged'}
         />
-        <Metric label="Missed" value={String(adh.missed)} hint={`${adh.rest} rest days`} />
+        <Metric label="Missed" value={String(adh.missed)} hint={`of ${adh.planned} planned`} />
       </MetricRow>
 
-      <View style={styles.agenda}>
-        {q.data.map((d) => {
-          const isToday = d.date === todayKey;
-          return (
-            <View key={d.date} style={styles.agendaRow}>
-              <View style={styles.dateCol}>
-                <Text variant="label" color={isToday ? colors.accent : colors.textMuted}>
-                  {isToday ? 'Today' : WEEKDAY_SHORT[weekdayOf(d.date)]}
-                </Text>
-                <Text variant="caption" faint>
-                  {formatDateKey(d.date, { day: 'numeric', month: 'short' })}
-                </Text>
-              </View>
-              <View style={styles.entries}>
-                {d.rest && !d.extraSessions && !d.habitAction ? (
-                  <Text variant="caption" faint>
-                    Rest
-                  </Text>
-                ) : null}
-                {d.occurrences.map((o) => (
-                  <Pressable
-                    key={o.dayId}
-                    disabled={!o.sessionId}
-                    onPress={() =>
-                      o.sessionId &&
-                      router.push({ pathname: '/workout/[id]', params: { id: o.sessionId } })
-                    }
-                    accessibilityRole={o.sessionId ? 'button' : undefined}
-                    style={({ pressed }) => [styles.entry, pressed ? styles.pressed : null]}
-                  >
-                    <Text numberOfLines={1}>{o.title}</Text>
-                    <StatusPill label={OUTCOME_LABEL[o.outcome]} tone={tone[o.outcome]} />
-                    {o.rescheduledFrom ? (
-                      <Text variant="caption" faint>
-                        Moved from {formatDateKey(o.rescheduledFrom)}
-                      </Text>
-                    ) : null}
-                  </Pressable>
-                ))}
-                {d.extraSessions ? (
-                  <StatusPill
-                    label={`${d.extraSessions} extra session${d.extraSessions > 1 ? 's' : ''}`}
-                    tone="accent"
-                  />
-                ) : null}
-                {d.habitAction && d.occurrences.every((o) => o.outcome !== 'habit_action') ? (
-                  <StatusPill label="Habit action" tone="info" />
-                ) : null}
-              </View>
-            </View>
-          );
-        })}
-      </View>
+      <Section title={formatDateKey(selected, { weekday: 'long', day: 'numeric', month: 'long' })}>
+        {!day || (day.rest && !day.extraSessions && !day.habitAction) ? (
+          <Text muted>
+            {selected > todayKey
+              ? 'Nothing planned — rest day.'
+              : 'Rest day. Recovery is part of the plan.'}
+          </Text>
+        ) : (
+          <List>
+            {day.occurrences.map((o) => (
+              <ListRow
+                key={o.dayId}
+                title={o.title}
+                subtitle={
+                  o.rescheduledFrom
+                    ? `Moved from ${formatDateKey(o.rescheduledFrom)}`
+                    : 'Planned session'
+                }
+                right={<StatusPill label={OUTCOME_LABEL[o.outcome]} tone={tone[o.outcome]} />}
+                onPress={
+                  o.sessionId
+                    ? () => router.push({ pathname: '/workout/[id]', params: { id: o.sessionId! } })
+                    : undefined
+                }
+                chevron={!!o.sessionId}
+              />
+            ))}
+            {day.extraSessions ? (
+              <ListRow
+                title={`${day.extraSessions} freeform session${day.extraSessions > 1 ? 's' : ''}`}
+                subtitle="Counts toward your streak"
+                right={<StatusPill label="Trained" tone="success" />}
+                onPress={() => router.push('/workout/history')}
+              />
+            ) : null}
+            {day.habitAction && day.occurrences.every((o) => o.outcome !== 'habit_action') ? (
+              <ListRow title="Habit action" right={<StatusPill label="Recorded" tone="info" />} />
+            ) : null}
+          </List>
+        )}
+      </Section>
 
       <Text variant="caption" faint>
-        “Not logged” means a past planned session has no record. Update it from Today — nothing else
-        is assumed.
+        Any session — planned or freeform — counts as a training day. Rest days never break a
+        streak.
       </Text>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  tabular: { fontVariant: ['tabular-nums'] },
-  strip: { flexDirection: 'row' },
-  stripCell: { flex: 1, alignItems: 'center', gap: spacing.xs },
-  dot: { width: 6, height: 6, borderRadius: 3 },
-  agenda: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  agendaRow: {
+  legend: {
     flexDirection: 'row',
-    paddingVertical: spacing.md,
-    gap: spacing.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    flexWrap: 'wrap',
+    columnGap: spacing.lg,
+    rowGap: spacing.xs,
+    paddingTop: spacing.sm,
   },
-  dateCol: { width: 64, gap: 2 },
-  entries: { flex: 1, gap: spacing.md },
-  entry: { gap: spacing.xs },
-  pressed: { opacity: 0.55 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.textFaint },
 });

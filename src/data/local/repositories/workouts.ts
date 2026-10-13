@@ -7,6 +7,7 @@ import type {
   WorkoutSession,
   WorkoutSet,
 } from '@/domain/models/types';
+import { isTargetSet } from '@/domain/models/types';
 import type { AdaptationReason, AdaptiveProposal, Energy } from '@/domain/rules/adaptiveDay';
 import { recommendProgression, type ProgressionResult } from '@/domain/rules/progression';
 import { detectPersonalRecords, type PrCandidate } from '@/domain/rules/prs';
@@ -26,6 +27,7 @@ import { getEntity, patchEntity, queryEntities, saveEntity } from '../store';
 import { applyAwards, type BadgeAward, type XpEvent } from './awards';
 import { getStreak, recordPlannedOutcome } from './attendance';
 import { getExerciseMap } from './exercises';
+import { toggleGroup } from './supersets';
 
 export class ActiveSessionExistsError extends Error {
   constructor(public sessionId: string) {
@@ -162,9 +164,14 @@ export async function startSession(db: SqlDb, input: StartSessionInput): Promise
           },
           issue_flag: false,
           notes: null,
+          superset_group: p.supersetGroup ?? null,
+          finished_at: null,
         });
       }
     } else {
+      const groupOf = new Map(
+        input.day.exercises.map((e) => [e.programmeExerciseId, e.supersetGroup ?? null]),
+      );
       const items = [...input.proposal.items].sort((a, b) => a.order - b.order);
       for (let i = 0; i < items.length; i++) {
         const it = items[i]!;
@@ -180,6 +187,8 @@ export async function startSession(db: SqlDb, input: StartSessionInput): Promise
           target: { ...it.target, sets: active ? it.proposedSets : it.plannedSets },
           issue_flag: false,
           notes: null,
+          superset_group: groupOf.get(it.programmeExerciseId) ?? null,
+          finished_at: null,
         });
       }
     }
@@ -274,6 +283,7 @@ export async function logSet(
       exercise_id: we.exercise_id,
       set_order: (max?.m ?? -1) + 1,
       ...values,
+      set_kind: values.set_kind ?? 'normal',
       completed_at: nowIso(),
     });
   });
@@ -287,7 +297,10 @@ export async function updateSet(db: SqlDb, setId: string, values: SetValues): Pr
     const ex = await getEntity<Exercise>(tx, 'exercise', set.exercise_id);
     const err = validateSetValues(ex?.logging_type ?? 'weight_reps', values);
     if (err) throw new Error(err);
-    return patchEntity<WorkoutSet>(tx, 'workout_set', setId, values);
+    return patchEntity<WorkoutSet>(tx, 'workout_set', setId, {
+      ...values,
+      set_kind: values.set_kind ?? set.set_kind ?? 'normal',
+    });
   });
 }
 
@@ -324,13 +337,15 @@ export async function addExerciseToSession(
       target: null,
       issue_flag: false,
       notes: null,
+      superset_group: null,
+      finished_at: null,
     });
   });
 }
 
 async function workingSetCount(db: SqlDb, weId: string): Promise<number> {
   const r = await db.first<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM workout_set WHERE workout_exercise_id = ? AND deleted_at IS NULL AND is_warmup = 0',
+    "SELECT COUNT(*) AS n FROM workout_set WHERE workout_exercise_id = ? AND deleted_at IS NULL AND is_warmup = 0 AND set_kind = 'normal'",
     [weId],
   );
   return r?.n ?? 0;
@@ -384,6 +399,8 @@ export async function substituteExercise(
       target: remaining,
       issue_flag: false,
       notes: null,
+      superset_group: we.superset_group,
+      finished_at: null,
     });
   });
 }
@@ -408,6 +425,62 @@ export async function undeferExercise(db: SqlDb, weId: string): Promise<void> {
   if (!we) return;
   await patchEntity<WorkoutExercise>(db, 'workout_exercise', weId, {
     disposition: we.replaced_exercise_id ? 'substituted' : 'included',
+  });
+}
+
+/**
+ * Reverses a substitution made during the session (only before any set is logged on it):
+ * the row goes back to the originally planned exercise.
+ */
+export async function undoSubstitution(db: SqlDb, weId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const we = await getEntity<WorkoutExercise>(tx, 'workout_exercise', weId);
+    if (!we || we.disposition !== 'substituted' || !we.replaced_exercise_id) return;
+    await requireInProgress(tx, we.session_id);
+    if ((await workingSetCount(tx, weId)) > 0)
+      throw new Error('Sets were already logged on the substitute. Delete them first to undo.');
+    await patchEntity<WorkoutExercise>(tx, 'workout_exercise', weId, {
+      exercise_id: we.replaced_exercise_id,
+      replaced_exercise_id: null,
+      disposition: 'included',
+      substitution_reason: null,
+    });
+  });
+}
+
+/** Marks an exercise done (or reopens it). Finishing early is honest: completion still counts sets. */
+export async function setExerciseFinished(
+  db: SqlDb,
+  weId: string,
+  finished: boolean,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const we = await getEntity<WorkoutExercise>(tx, 'workout_exercise', weId);
+    if (!we) throw new Error('Exercise not found in this session.');
+    await requireInProgress(tx, we.session_id);
+    await patchEntity<WorkoutExercise>(tx, 'workout_exercise', weId, {
+      finished_at: finished ? nowIso() : null,
+    });
+  });
+}
+
+/**
+ * Links an exercise with the next one in the session as a superset (back-to-back, rest after
+ * the last), or removes it from its superset. Groups of one are dissolved.
+ */
+export async function toggleSessionSuperset(db: SqlDb, weId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const we = await getEntity<WorkoutExercise>(tx, 'workout_exercise', weId);
+    if (!we) throw new Error('Exercise not found in this session.');
+    await requireInProgress(tx, we.session_id);
+    const rows = await queryEntities<WorkoutExercise>(
+      tx,
+      'workout_exercise',
+      'session_id = ? AND deleted_at IS NULL',
+      [we.session_id],
+      'ex_order',
+    );
+    await toggleGroup(tx, 'workout_exercise', rows, weId);
   });
 }
 
@@ -485,7 +558,7 @@ async function priorSetsFor(
   return queryEntities<WorkoutSet>(
     db,
     'workout_set',
-    `exercise_id = ? AND deleted_at IS NULL AND session_id != ? AND session_id IN
+    `exercise_id = ? AND deleted_at IS NULL AND set_kind = 'normal' AND session_id != ? AND session_id IN
        (SELECT id FROM workout_session WHERE status IN ${COMPLETED_SQL} AND deleted_at IS NULL)`,
     [exerciseId, excludeSessionId],
   );
@@ -506,7 +579,7 @@ export async function finishSession(
     const { session, items } = detail;
     if (session.status !== 'in_progress') throw new Error('This session is already finished.');
 
-    const working = (sets: WorkoutSet[]) => sets.filter((s) => !s.is_warmup);
+    const working = (sets: WorkoutSet[]) => sets.filter(isTargetSet);
     const status = classifyCompletion(
       session.session_type,
       items.map((i) => ({
@@ -683,7 +756,7 @@ export async function getExerciseHistory(
   }>(
     `SELECT DISTINCT s.id, s.session_date, s.title, s.completed_at FROM workout_session s
      JOIN workout_set ws ON ws.session_id = s.id
-     WHERE ws.exercise_id = ? AND ws.deleted_at IS NULL AND ws.is_warmup = 0
+     WHERE ws.exercise_id = ? AND ws.deleted_at IS NULL AND ws.is_warmup = 0 AND ws.set_kind = 'normal'
        AND s.status IN ${COMPLETED_SQL} AND s.deleted_at IS NULL AND s.id != ?
      ORDER BY s.completed_at DESC LIMIT ?`,
     [exerciseId, excludeSessionId ?? '', limit],
@@ -693,7 +766,7 @@ export async function getExerciseHistory(
     const sets = await queryEntities<WorkoutSet>(
       db,
       'workout_set',
-      'session_id = ? AND exercise_id = ? AND deleted_at IS NULL AND is_warmup = 0',
+      "session_id = ? AND exercise_id = ? AND deleted_at IS NULL AND is_warmup = 0 AND set_kind = 'normal'",
       [s.id, exerciseId],
       'set_order',
     );

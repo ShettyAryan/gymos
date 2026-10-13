@@ -96,6 +96,7 @@ export type ProgrammeExercise = SyncMeta & {
   target_rir: number | null;
   priority: Priority;
   alternative_ids: string[];
+  superset_group: string | null;
   notes: string | null;
 };
 
@@ -130,6 +131,8 @@ export type PlannedExercise = {
   priority: Priority;
   alternativeIds: string[];
   notes: string | null;
+  /** Absent in snapshots approved before supersets existed. */
+  supersetGroup?: string | null;
 };
 
 export type ProgrammeVersion = SyncMeta & {
@@ -196,7 +199,15 @@ export type WorkoutExercise = SyncMeta & {
   target: ExerciseTarget | null;
   issue_flag: boolean;
   notes: string | null;
+  superset_group: string | null;
+  finished_at: string | null;
 };
+
+export type SetKind = 'normal' | 'drop';
+
+/** Sets that count toward targets, PRs and progression (not warm-ups, not drop sets). */
+export const isTargetSet = (s: { is_warmup: boolean; set_kind?: SetKind | null }) =>
+  !s.is_warmup && s.set_kind !== 'drop';
 
 export type WorkoutSet = SyncMeta & {
   id: string;
@@ -211,6 +222,8 @@ export type WorkoutSet = SyncMeta & {
   rpe: number | null;
   rir: number | null;
   is_warmup: boolean;
+  /** 'drop' continues the previous set at a lower load: volume only, not a target set. */
+  set_kind: SetKind;
   completed_at: string;
   notes: string | null;
 };

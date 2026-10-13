@@ -174,26 +174,28 @@ const NEUTRAL: OccurrenceOutcome[] = [
 export type StreakResult = { current: number; best: number; currentStartedOn: DateKey | null };
 
 /**
- * Session streak = consecutive planned sessions attended (newest backwards). Rest days are not
- * occurrences so they never break it; reschedules, excused cancellations and habit actions are
- * neutral; missed (confirmed or not) and unexcused cancellations end it.
+ * Streak = consecutive training days. A day extends it when a planned session was completed
+ * (as planned, adapted or partial) or any freeform / extra session was logged. Rest days,
+ * reschedules, excused skips and habit actions are neutral; a missed or unexcused planned
+ * session on a day with no training ends it.
  */
 export function computeStreak(calendar: CalendarDay[]): StreakResult {
-  const occ = calendar
-    .flatMap((d) => d.occurrences)
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const days = [...calendar].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
   let best = 0;
   let run = 0;
   let runStart: DateKey | null = null;
-  for (const o of occ) {
-    if (EXTENDS.includes(o.outcome)) {
-      if (run === 0) runStart = o.date;
+  for (const d of days) {
+    // A day counts once: any completed planned session OR any freeform/extra session.
+    const trained = d.extraSessions > 0 || d.occurrences.some((o) => EXTENDS.includes(o.outcome));
+    if (trained) {
+      if (run === 0) runStart = d.date;
       run += 1;
       best = Math.max(best, run);
-    } else if (!NEUTRAL.includes(o.outcome)) {
+    } else if (d.occurrences.some((o) => !NEUTRAL.includes(o.outcome))) {
       run = 0;
       runStart = null;
     }
+    // Rest days and neutral outcomes (reschedule, excused, habit action) leave the run as is.
   }
   return { current: run, best, currentStartedOn: runStart };
 }
@@ -206,6 +208,8 @@ export type WeekAdherence = {
   missed: number;
   rest: number;
   extra: number;
+  /** Every session that happened: planned ones attended plus freeform/extra. */
+  sessions: number;
 };
 
 export function weekAdherence(week: CalendarDay[]): WeekAdherence {
@@ -221,6 +225,9 @@ export function weekAdherence(week: CalendarDay[]): WeekAdherence {
     ).length,
     rest: week.filter((d) => d.rest).length,
     extra: week.reduce((n, d) => n + d.extraSessions, 0),
+    sessions:
+      occ.filter((o) => EXTENDS.includes(o.outcome)).length +
+      week.reduce((n, d) => n + d.extraSessions, 0),
   };
 }
 

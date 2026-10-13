@@ -26,7 +26,7 @@ import {
   type Recommendation,
 } from '@/data/local/repositories/workouts';
 import { queryEntities } from '@/data/local/store';
-import type { SessionStatus } from '@/domain/models/types';
+import { isTargetSet, type SessionStatus } from '@/domain/models/types';
 import { DECISION_LABEL } from '@/domain/rules/progression';
 import { RECORD_LABEL, type RecordType } from '@/domain/rules/prs';
 import { STATUS_LABEL } from '@/domain/rules/sessionState';
@@ -71,7 +71,7 @@ export default function SessionScreen() {
 
   const { detail, prs, xp, recos } = q.data;
   const { session, items } = detail;
-  const working = items.map((i) => ({ ...i, working: i.sets.filter((s) => !s.is_warmup) }));
+  const working = items.map((i) => ({ ...i, working: i.sets.filter(isTargetSet) }));
   const done = working.filter((i) => i.working.length > 0);
   const notDone = working.filter((i) => i.working.length === 0 && i.we.target);
   const totalSets = done.reduce((n, i) => n + i.working.length, 0);
@@ -201,7 +201,7 @@ export default function SessionScreen() {
                   }}
                 >
                   <Text variant="caption" faint style={{ width: 36 }}>
-                    {s.is_warmup ? 'W' : idx + 1}
+                    {s.is_warmup ? 'W' : s.set_kind === 'drop' ? 'D' : idx + 1}
                   </Text>
                   <Text variant="caption" style={{ flex: 1, fontVariant: ['tabular-nums'] }}>
                     {formatSet(s, i.exercise?.logging_type ?? 'weight_reps', units)}

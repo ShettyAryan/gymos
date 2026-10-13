@@ -15,6 +15,7 @@ import type { SqlDb } from '../db';
 import { getEntity, patchEntity, queryEntities, saveEntity, softDelete } from '../store';
 
 import { getExerciseMap } from './exercises';
+import { toggleGroup } from './supersets';
 
 export type ProgrammeDetail = {
   programme: Programme;
@@ -239,6 +240,7 @@ export async function addExerciseToDay(
       ex_order: order,
       ...defaultPrescription(ex, order === 0 ? 'primary' : 'secondary'),
       ...prescription,
+      superset_group: null,
     });
     await touch(tx, day.programme_id);
     return pe;
@@ -266,7 +268,9 @@ export async function updateProgrammeExercise(
 
 export async function removeProgrammeExercise(db: SqlDb, itemId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    const { day } = await dayOfItem(tx, itemId);
+    const { pe, day } = await dayOfItem(tx, itemId);
+    // Leave the superset first so a group of one is dissolved.
+    if (pe.superset_group) await toggleProgrammeSupersetIn(tx, pe);
     await softDelete(tx, 'programme_exercise', itemId);
     await touch(tx, day.programme_id);
   });
@@ -287,6 +291,26 @@ export async function moveProgrammeExercise(
       'ex_order',
     );
     await swapOrder(tx, 'programme_exercise', 'ex_order', items, itemId, direction);
+    await touch(tx, day.programme_id);
+  });
+}
+
+async function toggleProgrammeSupersetIn(db: SqlDb, pe: ProgrammeExercise): Promise<void> {
+  const items = await queryEntities<ProgrammeExercise>(
+    db,
+    'programme_exercise',
+    'programme_day_id = ? AND deleted_at IS NULL',
+    [pe.programme_day_id],
+    'ex_order',
+  );
+  await toggleGroup(db, 'programme_exercise', items, pe.id);
+}
+
+/** Links a programme exercise with the next one as a superset, or unlinks it. */
+export async function toggleProgrammeSuperset(db: SqlDb, itemId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const { pe, day } = await dayOfItem(tx, itemId);
+    await toggleProgrammeSupersetIn(tx, pe);
     await touch(tx, day.programme_id);
   });
 }
@@ -329,6 +353,7 @@ export function buildSnapshot(
         targetRir: pe.target_rir,
         priority: pe.priority,
         alternativeIds: pe.alternative_ids.filter((a) => exercises.has(a)),
+        supersetGroup: pe.superset_group ?? null,
         notes: pe.notes,
       })),
     })),

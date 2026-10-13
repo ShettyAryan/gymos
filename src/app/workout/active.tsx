@@ -36,7 +36,7 @@ import {
   restoreSet,
   resumeSession,
 } from '@/data/local/repositories/workouts';
-import type { WorkoutSet } from '@/domain/models/types';
+import { isTargetSet, type WorkoutSet } from '@/domain/models/types';
 import { classifyCompletion, STATUS_LABEL } from '@/domain/rules/sessionState';
 import { ExerciseCard } from '@/features/workout/ExerciseCard';
 import { useUnits } from '@/features/workout/useUnits';
@@ -117,16 +117,28 @@ export default function ActiveWorkoutScreen() {
     items.map((i) => ({
       disposition: i.we.disposition,
       targetSets: i.we.target?.sets ?? null,
-      loggedWorkingSets: i.sets.filter((s) => !s.is_warmup).length,
+      loggedWorkingSets: i.sets.filter(isTargetSet).length,
     })),
   );
   const targets = items.filter(
     (i) => i.we.target && (i.we.disposition === 'included' || i.we.disposition === 'substituted'),
   );
   const met = targets.filter(
-    (i) => i.sets.filter((s) => !s.is_warmup).length >= (i.we.target?.sets ?? 0),
+    (i) => i.sets.filter(isTargetSet).length >= (i.we.target?.sets ?? 0),
   ).length;
-  const totalSets = items.reduce((n, i) => n + i.sets.filter((s) => !s.is_warmup).length, 0);
+  // Superset labels in order of first appearance (A, B, …) and who comes next within each group.
+  const groupLetter = new Map<string, string>();
+  for (const i of items) {
+    const g = i.we.superset_group;
+    if (g && !groupLetter.has(g)) groupLetter.set(g, String.fromCharCode(65 + groupLetter.size));
+  }
+  const nextInGroup = (idx: number): string | null => {
+    const g = items[idx]?.we.superset_group;
+    if (!g) return null;
+    const next = items.slice(idx + 1).find((i) => i.we.superset_group === g);
+    return next ? (next.exercise?.name ?? 'next exercise') : null;
+  };
+  const totalSets = items.reduce((n, i) => n + i.sets.filter(isTargetSet).length, 0);
 
   const onFinish = () => {
     if (!preview) {
@@ -298,10 +310,15 @@ export default function ActiveWorkoutScreen() {
       {items.length === 0 ? (
         <EmptyState title="Add your first exercise" message="Use “Add exercise” below." />
       ) : null}
-      {items.map((item) => (
+      {items.map((item, idx) => (
         <ExerciseCard
           key={item.we.id}
           item={item}
+          hasNext={idx < items.length - 1}
+          supersetLabel={
+            item.we.superset_group ? `Superset ${groupLetter.get(item.we.superset_group)}` : null
+          }
+          nextInSuperset={nextInGroup(idx)}
           units={units}
           previous={previous.get(item.we.exercise_id) ?? null}
           recommendation={recos.get(item.we.exercise_id) ?? null}
